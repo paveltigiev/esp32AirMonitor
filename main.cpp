@@ -2,6 +2,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <SparkFun_SCD4x_Arduino_Library.h>
+#include <Preferences.h>  // добавили для Flash
 
 // ==========================
 // Настройки OLED дисплея
@@ -22,6 +23,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 // Объект для датчика
 // ==========================
 SCD4x scd4x;
+Preferences preferences;   // объект для хранения калибровки
 
 // ==========================
 // Переменные для калибровки
@@ -29,6 +31,7 @@ SCD4x scd4x;
 bool calibrationInProgress = false;
 unsigned long calibrationStartTime = 0;
 const unsigned long CALIBRATION_WAIT_TIME = 180000; // 3 минуты
+int16_t lastCalibrationOffset = -1; // сохраняем смещение
 
 // ==========================
 // Переменные для тренда
@@ -85,6 +88,22 @@ void setup() {
   delay(500);
   scd4x.setAutomaticSelfCalibrationEnabled(false);
   scd4x.startPeriodicMeasurement();
+
+  // Загружаем последнюю калибровку из Flash
+  preferences.begin("co2calib", true);
+  lastCalibrationOffset = preferences.getInt("offset", -1);
+  preferences.end();
+
+  if (lastCalibrationOffset != -1) {
+    Serial.print("Restoring calibration offset: ");
+    Serial.println(lastCalibrationOffset);
+
+    scd4x.stopPeriodicMeasurement();
+    delay(500);
+    scd4x.performForcedRecalibration(lastCalibrationOffset);
+    delay(500);
+    scd4x.startPeriodicMeasurement();
+  }
 
   display.clearDisplay();
   display.setCursor(0,0);
@@ -231,15 +250,24 @@ void performManualCalibration() {
   scd4x.stopPeriodicMeasurement();
   delay(500);
 
-  bool calibrationResult = scd4x.performForcedRecalibration(400);
+  int16_t correction = scd4x.performForcedRecalibration(400);
 
   delay(500);
   scd4x.startPeriodicMeasurement();
 
   display.clearDisplay();
-  if (calibrationResult) {
+  if (correction != 0xFFFF) {
     display.println("CALIBRATION OK");
-    display.println("400ppm ref set");
+    display.print("Offset: ");
+    display.println(correction);
+
+    // Сохраняем в Flash
+    preferences.begin("co2calib", false);
+    preferences.putInt("offset", correction);
+    preferences.end();
+
+    lastCalibrationOffset = correction;
+
   } else {
     display.println("CALIBRATION FAIL");
   }
